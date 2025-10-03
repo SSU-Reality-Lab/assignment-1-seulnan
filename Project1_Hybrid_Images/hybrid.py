@@ -17,6 +17,22 @@ def gaussian_blur_kernel_2d(sigma, height, width):
         (height x width) 크기의 커널을 반환합니다. 이 커널로 이미지를 컨볼브하면
         가우시안 블러가 적용된 결과가 나옵니다.
     '''
+    if sigma <= 0:
+        raise ValueError('sigma must be positive')
+
+    # 중앙을 기준으로 좌표계를 만들고, 등방성 2D 가우시안 생성
+    cy = (height - 1) / 2.0
+    cx = (width - 1) / 2.0
+    y = np.arange(height, dtype=np.float32).reshape(-1, 1)
+    x = np.arange(width, dtype=np.float32).reshape(1, -1)
+    dy2 = (y - cy) ** 2
+    dx2 = (x - cx) ** 2
+    kernel = np.exp(-(dy2 + dx2) / (2.0 * (sigma ** 2)))
+    kernel = kernel.astype(np.float32)
+    s = np.sum(kernel)
+    if s != 0:
+        kernel /= s
+    return kernel
 
 def cross_correlation_2d(img, kernel):
     '''주어진 커널(크기 m x n )을 사용하여 입력 이미지와의
@@ -29,10 +45,39 @@ def cross_correlation_2d(img, kernel):
                 그레이스케일 이미지(height x width).
         kernel: 2차원 NumPy 배열(m x n). m과 n은 모두 홀수(서로 같을 필요는 없음).
     '''
-    
+
     '''출력(Output):
         입력 이미지와 동일한 크기(같은 너비, 높이, 채널 수)의 이미지를 반환합니다.
     '''
+    if img.ndim == 2:
+        img_float = img.astype(np.float32)
+        h, w = img_float.shape
+        m, n = kernel.shape
+        pad_h = m // 2
+        pad_w = n // 2
+        padded = np.pad(img_float, ((pad_h, pad_h), (pad_w, pad_w)), mode='constant', constant_values=0)
+        out = np.zeros((h, w), dtype=np.float32)
+        for y in range(h):
+            for x in range(w):
+                window = padded[y:y+m, x:x+n]
+                out[y, x] = float(np.sum(window * kernel))
+        return out
+    elif img.ndim == 3:
+        img_float = img.astype(np.float32)
+        h, w, c = img_float.shape
+        m, n = kernel.shape
+        pad_h = m // 2
+        pad_w = n // 2
+        padded = np.pad(img_float, ((pad_h, pad_h), (pad_w, pad_w), (0, 0)), mode='constant', constant_values=0)
+        out = np.zeros((h, w, c), dtype=np.float32)
+        for y in range(h):
+            for x in range(w):
+                window = padded[y:y+m, x:x+n, :]
+                for ch in range(c):
+                    out[y, x, ch] = float(np.sum(window[:, :, ch] * kernel))
+        return out
+    else:
+        raise ValueError('img must be 2D or 3D array')
 
 def convolve_2d(img, kernel):
     '''cross_correlation_2d()를 사용하여 2D 컨볼루션을 수행합니다.
@@ -45,6 +90,9 @@ def convolve_2d(img, kernel):
     출력(Output):
         입력 이미지와 동일한 크기(같은 너비, 높이, 채널 수)의 이미지를 반환합니다.
     '''
+    # 컨볼루션은 커널을 좌우/상하로 뒤집은 뒤 cross-correlation을 수행
+    flipped = kernel[::-1, ::-1]
+    return cross_correlation_2d(img, flipped)
 
 
 def low_pass(img, sigma, size):
@@ -55,6 +103,10 @@ def low_pass(img, sigma, size):
     출력(Output):
         입력 이미지와 동일한 크기(같은 너비, 높이, 채널 수)의 이미지를 반환합니다.
     '''
+    # 정사각형 가우시안 커널 생성(등방성)
+    kernel = gaussian_blur_kernel_2d(sigma, size, size)
+    # 가우시안은 대칭이므로 상관/컨볼루션 동일. 명시적으로 상관 사용
+    return cross_correlation_2d(img, kernel)
 
 def high_pass(img, sigma, size):
     '''주어진 sigma와 정사각형 커널 크기(size)를 사용해 고역통과(high-pass)
@@ -64,6 +116,14 @@ def high_pass(img, sigma, size):
     출력(Output):
         입력 이미지와 동일한 크기(같은 너비, 높이, 채널 수)의 이미지를 반환합니다.
     '''
+    # 고역통과 = 원본 - 저역통과
+    blurred = low_pass(img, sigma, size)
+    if img.ndim == 2:
+        return img.astype(np.float32) - blurred
+    elif img.ndim == 3:
+        return img.astype(np.float32) - blurred
+    else:
+        raise ValueError('img must be 2D or 3D array')
 
 def create_hybrid_image(img1, img2, sigma1, size1, high_low1, sigma2, size2,
         high_low2, mixin_ratio, scale_factor):
